@@ -98,45 +98,58 @@ def process_camera_feed():
 
                         landmarks = results.pose_landmarks.landmark
 
+                        # Extract joints for arms
                         left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
                         right_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER]
                         left_elbow = landmarks[mp_pose.PoseLandmark.LEFT_ELBOW]
                         right_elbow = landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW]
-                        
-                        arm_extension_threshold = 0.7  # You can adjust this value for tuning
+                        left_wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST]
+                        right_wrist = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST]
+
+                        # Label the points
+                        cv2.putText(frame, 'Left Shoulder', (int(left_shoulder.x * frame.shape[1]), int(left_shoulder.y * frame.shape[0])), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+                        cv2.putText(frame, 'Right Shoulder', (int(right_shoulder.x * frame.shape[1]), int(right_shoulder.y * frame.shape[0])), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+                        cv2.putText(frame, 'Left Elbow', (int(left_elbow.x * frame.shape[1]), int(left_elbow.y * frame.shape[0])), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+                        cv2.putText(frame, 'Right Elbow', (int(right_elbow.x * frame.shape[1]), int(right_elbow.y * frame.shape[0])), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+                        cv2.putText(frame, 'Left Wrist', (int(left_wrist.x * frame.shape[1]), int(left_wrist.y * frame.shape[0])), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+                        cv2.putText(frame, 'Right Wrist', (int(right_wrist.x * frame.shape[1]), int(right_wrist.y * frame.shape[0])), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+
+                        arm_extension_threshold = 0.2  # You can adjust this value for tuning
                         arms_extended = (abs(left_shoulder.x - left_elbow.x) > arm_extension_threshold or
                                          abs(right_shoulder.x - right_elbow.x) > arm_extension_threshold)
 
                         if arms_extended:
                             heart_attack_status.set("Heart Attack Status: Normal (Arms Extended)")
+                            lie_down_start_time = None
+                            is_person_lying_down = False
+                            continue
+
+                        ratio = width / height if height > 0 else 0
+                        person_ratio.set(f"Person Ratio: {ratio:.2f}")
+
+                        if ratio > 2:
+                            if lie_down_start_time is None:
+                                lie_down_start_time = time.time()
+                            elif time.time() - lie_down_start_time >= 3:
+                                is_person_lying_down = True
                         else:
-                            ratio = width / height if height > 0 else 0
-                            person_ratio.set(f"Person Ratio: {ratio:.2f}")
+                            lie_down_start_time = None
+                            is_person_lying_down = False
 
-                            # Detect if person is lying down
-                            if ratio > 1.5:
-                                if lie_down_start_time is None:
-                                    lie_down_start_time = time.time()
-                                elif time.time() - lie_down_start_time >= 3:
-                                    is_person_lying_down = True
-                            else:
-                                lie_down_start_time = None
-                                is_person_lying_down = False
-
-                            # If person has been lying down for 3 seconds and heart attack hasn't been triggered
-                            if is_person_lying_down and not detection_ready:
-                                detection_ready = True
-                                heart_attack_status.set("Heart Attack Status: Possible Heart Attack (Person Lying Down)")
-                                latitude, longitude, address, ip = fetch_ip_location()
-                                if latitude and longitude:
-                                    message = (f"Patient is currently experiencing a heart attack. Immediate medical assistance is required near {address}. "
-                                               f"Coordinates: Lat: {latitude}, Long: {longitude}. IP: {ip}.")
-                                    tts_engine.say("You are currently experiencing a heart attack. Notifying emergency services.")
-                                    tts_engine.runAndWait()
-                                    send_sms(message)
-                            elif not is_person_lying_down:
-                                heart_attack_status.set("Heart Attack Status: Normal")
-                                detection_ready = False
+                        # If person has been lying down for 3 seconds and heart attack hasn't been triggered
+                        if is_person_lying_down and not detection_ready:
+                            detection_ready = True
+                            heart_attack_status.set("Heart Attack Status: Possible Heart Attack (Person Lying Down)")
+                            latitude, longitude, address, ip = fetch_ip_location() if heart_attack_status.get() == "Heart Attack Status: Possible Heart Attack (Person Lying Down)" else (None, None, None, None)
+                            if latitude and longitude:
+                                message = (f"Patient is currently experiencing a heart attack. Immediate medical assistance is required near {address}. "
+                                           f"Coordinates: Lat: {latitude}, Long: {longitude}. IP: {ip}.")
+                                tts_engine.say("You are currently experiencing a heart attack. Notifying emergency services.")
+                                tts_engine.runAndWait()
+                                send_sms(message)
+                        elif not is_person_lying_down:
+                            heart_attack_status.set("Heart Attack Status: Normal")
+                            detection_ready = False
 
                     person_detected = True
                     break
@@ -149,25 +162,25 @@ def process_camera_feed():
     cv2.destroyAllWindows()
 
 def update_location_in_gui():
-    latitude, longitude, address, ip = fetch_ip_location()
-    if latitude and longitude:
-        location_status.set(f"Location: {address} (Lat: {latitude}, Long: {longitude})")
-        ip_status.set(f"IP Address: {ip}")
-    else:
-        location_status.set("Location: Not Detected")
-        ip_status.set("IP Address: Not Detected")
-    main_window.after(GUI_REFRESH_INTERVAL_MS, update_location_in_gui)
+    if heart_attack_status.get() == "Heart Attack Status: Possible Heart Attack (Person Lying Down)":
+        latitude, longitude, address, ip = fetch_ip_location()
+        if latitude and longitude:
+            location_status.set(f"Location: {address} (Lat: {latitude}, Long: {longitude})")
+            ip_status.set(f"IP Address: {ip}")
+
+    if GUI_ENABLED:
+        main_window.after(GUI_REFRESH_INTERVAL_MS, update_location_in_gui)
 
 if GUI_ENABLED:
-    ttk.Label(main_window, textvariable=location_status, wraplength=350).pack(pady=10)
-    ttk.Label(main_window, textvariable=ip_status, wraplength=350).pack(pady=10)
-    ttk.Label(main_window, textvariable=sms_status, wraplength=350).pack(pady=10)
-    ttk.Label(main_window, textvariable=person_ratio, wraplength=350).pack(pady=10)
-    ttk.Label(main_window, textvariable=heart_attack_status, wraplength=350).pack(pady=10)
+    ttk.Label(main_window, textvariable=location_status).pack(pady=10)
+    ttk.Label(main_window, textvariable=sms_status).pack(pady=10)
+    ttk.Label(main_window, textvariable=ip_status).pack(pady=10)
+    ttk.Label(main_window, textvariable=person_ratio).pack(pady=10)
+    ttk.Label(main_window, textvariable=heart_attack_status).pack(pady=10)
+    update_location_in_gui()
 
-camera_thread = threading.Thread(target=process_camera_feed, daemon=True)
+camera_thread = threading.Thread(target=process_camera_feed)
 camera_thread.start()
 
 if GUI_ENABLED:
-    update_location_in_gui()
     main_window.mainloop()
