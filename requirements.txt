@@ -1,6 +1,6 @@
 opencv-python
+numpy
+requests
 pyttsx3
 geopy
-requests
-tk
-numpy
+mediapipe

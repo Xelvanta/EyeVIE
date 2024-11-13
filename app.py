@@ -6,6 +6,11 @@ from tkinter import ttk
 import requests
 import pyttsx3
 from geopy.geocoders import Nominatim
+import mediapipe as mp
+import time
+
+mp_pose = mp.solutions.pose
+pose = mp_pose.Pose()
 
 tts_engine = pyttsx3.init()
 geolocator = Nominatim(user_agent="emergency_alert_system")
@@ -14,6 +19,11 @@ cap = cv2.VideoCapture(0)  # Capture from camera (0 for default)
 EMERGENCY_NUMBER = 'YOUR_EMERGENCY_NUMBER'
 GUI_ENABLED = True  # Set to False to disable GUI
 GUI_REFRESH_INTERVAL_MS = 1000
+
+heart_attack_start_time = None
+is_person_lying_down = False
+lie_down_start_time = None
+detection_ready = False
 
 if GUI_ENABLED:
     main_window = tk.Tk()
@@ -51,6 +61,8 @@ def send_sms(message):
     sms_status.set(f"SMS Sent: {message}")
 
 def process_camera_feed():
+    global heart_attack_start_time, is_person_lying_down, lie_down_start_time, detection_ready
+    
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -78,20 +90,53 @@ def process_camera_feed():
                     cv2.rectangle(frame, (x, y), (x + width, y + height), (0, 255, 0), 2)
                     cv2.putText(frame, f"{class_names[class_id]} {int(confidence * 100)}%", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                    ratio = width / height if height > 0 else 0
-                    person_ratio.set(f"Person Ratio: {ratio:.2f}")
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    results = pose.process(frame_rgb)
 
-                    if ratio > 1.5:
-                        heart_attack_status.set("Heart Attack Status: Possible Heart Attack (Person Lying Down)")
-                        latitude, longitude, address, ip = fetch_ip_location()
-                        if latitude and longitude:
-                            message = (f"Patient is currently experiencing a heart attack. Immediate medical assistance is required near {address}. "
-                                       f"Coordinates: Lat: {latitude}, Long: {longitude}. IP: {ip}.")
-                            tts_engine.say("You are currently experiencing a heart attack. Notifying emergency services.")
-                            tts_engine.runAndWait()
-                            send_sms(message)
-                    else:
-                        heart_attack_status.set("Heart Attack Status: Normal")
+                    if results.pose_landmarks:
+                        mp.solutions.drawing_utils.draw_landmarks(frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+
+                        landmarks = results.pose_landmarks.landmark
+
+                        left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
+                        right_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+                        left_elbow = landmarks[mp_pose.PoseLandmark.LEFT_ELBOW]
+                        right_elbow = landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW]
+                        
+                        arm_extension_threshold = 0.7  # You can adjust this value for tuning
+                        arms_extended = (abs(left_shoulder.x - left_elbow.x) > arm_extension_threshold or
+                                         abs(right_shoulder.x - right_elbow.x) > arm_extension_threshold)
+
+                        if arms_extended:
+                            heart_attack_status.set("Heart Attack Status: Normal (Arms Extended)")
+                        else:
+                            ratio = width / height if height > 0 else 0
+                            person_ratio.set(f"Person Ratio: {ratio:.2f}")
+
+                            # Detect if person is lying down
+                            if ratio > 1.5:
+                                if lie_down_start_time is None:
+                                    lie_down_start_time = time.time()
+                                elif time.time() - lie_down_start_time >= 3:
+                                    is_person_lying_down = True
+                            else:
+                                lie_down_start_time = None
+                                is_person_lying_down = False
+
+                            # If person has been lying down for 3 seconds and heart attack hasn't been triggered
+                            if is_person_lying_down and not detection_ready:
+                                detection_ready = True
+                                heart_attack_status.set("Heart Attack Status: Possible Heart Attack (Person Lying Down)")
+                                latitude, longitude, address, ip = fetch_ip_location()
+                                if latitude and longitude:
+                                    message = (f"Patient is currently experiencing a heart attack. Immediate medical assistance is required near {address}. "
+                                               f"Coordinates: Lat: {latitude}, Long: {longitude}. IP: {ip}.")
+                                    tts_engine.say("You are currently experiencing a heart attack. Notifying emergency services.")
+                                    tts_engine.runAndWait()
+                                    send_sms(message)
+                            elif not is_person_lying_down:
+                                heart_attack_status.set("Heart Attack Status: Normal")
+                                detection_ready = False
 
                     person_detected = True
                     break
