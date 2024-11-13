@@ -1,0 +1,6 @@
+opencv-python
+pyttsx3
+geopy
+requests
+tk
+numpy
